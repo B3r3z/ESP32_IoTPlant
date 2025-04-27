@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include "mqtt_manager.h"
 
 void MqttManager::begin(const char* ssid,
@@ -9,53 +10,72 @@ void MqttManager::begin(const char* ssid,
     _broker   = broker;
     _port     = port;
 
-    // zarejestruj handler Wi‑Fi
-    _wifiEventId = WiFi.onEvent(
-      [this](WiFiEvent_t event){ onWifiEvent(event); }
-    );
+    Serial.println("[MqttManager] begin");
 
     connectToWifi();
 }
 
 void MqttManager::connectToWifi() {
+    Serial.print("[MqttManager] Connecting to Wi-Fi ");
+    Serial.println(_ssid);
     WiFi.begin(_ssid, _password);
 }
 
-void MqttManager::onWifiEvent(WiFiEvent_t event) {
-    if (event == SYSTEM_EVENT_STA_GOT_IP) {
-        // po uzyskaniu IP – łączymy MQTT
+// polling-based update to handle Wi-Fi and MQTT reconnects
+void MqttManager::update() {
+    if (WiFi.status() == WL_CONNECTED) {
+        if (!_wifiConnected) {
+            _wifiConnected = true;
+            Serial.print("[MqttManager] Wi-Fi connected, IP: ");
+            Serial.println(WiFi.localIP());
+            connectToMqtt();
+        }
+    } else {
+        if (_wifiConnected) {
+            _wifiConnected = false;
+            Serial.println("[MqttManager] Wi-Fi disconnected, reconnecting...");
+            WiFi.reconnect();
+        }
+    }
+    if (_wifiConnected && !_mqttClient.connected()) {
+        Serial.println("[MqttManager] MQTT not connected, reconnecting...");
         connectToMqtt();
-    } else if (event == SYSTEM_EVENT_STA_DISCONNECTED) {
-        // w razie rozłączenia – próbujemy ponownie Wi‑Fi
-        WiFi.reconnect();
     }
 }
 
 void MqttManager::connectToMqtt() {
+    Serial.print("[MqttManager] Connecting to MQTT broker ");
+    Serial.print(_broker);
+    Serial.print(":");
+    Serial.println(_port);
+
     _mqttClient.setServer(_broker, _port);
     _mqttClient.onConnect(
       [this](bool sessionPresent){ onMqttConnect(sessionPresent); }
     );
     _mqttClient.onDisconnect(
-      [](AsyncMqttClientDisconnectReason reason){
-          // tutaj ew. logika po disconnect
+      [this](AsyncMqttClientDisconnectReason reason){
+          Serial.print("[MqttManager] MQTT disconnected, reason: ");
+          Serial.println((int)reason);
+          connectToMqtt();
       }
     );
     _mqttClient.connect();
 }
 
 void MqttManager::onMqttConnect(bool sessionPresent) {
+    Serial.println("[MqttManager] MQTT connected");
     // np. automatycznie subskrybuj temat lub potwierdź połączenie
-    // Serial.println("MQTT connected!");
 }
 
 void MqttManager::publish(const char* topic, const char* payload) {
     if (_mqttClient.connected()) {
+        Serial.print("[MqttManager] Publishing to ");
+        Serial.print(topic);
+        Serial.print(": ");
+        Serial.println(payload);
         _mqttClient.publish(topic, 0, false, payload);
+    } else {
+        Serial.println("[MqttManager] Publish failed: MQTT not connected");
     }
-}
-
-void MqttManager::loop() {
-    // AsyncMqttClient nie wymaga loop(), ale jeśli używasz innej biblioteki:
-    _mqttClient.loop();
 }

@@ -14,13 +14,14 @@ public:
     // publikacja wiadomości
     void publish(const char* topic, const char* payload);
 
+    // poll Wi-Fi connection status and trigger MQTT connect
+    void update();
 
 private:
     void connectToWifi();
     void connectToMqtt();
 
-    // event‐handlery ESP32
-    void onWifiEvent(WiFiEvent_t event);
+    // handles successful MQTT connection
     void onMqttConnect(bool sessionPresent);
 
     const char* _ssid;
@@ -29,5 +30,6 @@ private:
     uint16_t    _port;
 
     AsyncMqttClient _mqttClient;
-    WiFiEventId_t  _wifiEventId;
+    // Wi-Fi connection state for polling
+    bool _wifiConnected = false;
 };
