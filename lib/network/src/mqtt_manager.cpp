@@ -1,5 +1,10 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>        // dodaj do platformio.ini / lib_deps: arduinojson
 #include "mqtt_manager.h"
+#include "mqtt_config.h"
+#include "controller.h"
+
+extern Controller controller;  // global z main.cpp
 
 void MqttManager::begin(const char* ssid,
                         const char* password,
@@ -11,6 +16,17 @@ void MqttManager::begin(const char* ssid,
     _port     = port;
 
     Serial.println("[MqttManager] begin");
+
+    // ustawiamy callback odbioru wiadomości
+    _mqttClient.onMessage(
+      [this](char* topic, char* payload, AsyncMqttClientMessageProperties props,
+             size_t len, size_t index, size_t total) {
+        String t(topic);
+        String p;
+        for(size_t i=0;i<len;i++) p += (char)payload[i];
+        onMqttMessage(t, p);
+      }
+    );
 
     connectToWifi();
 }
@@ -65,7 +81,31 @@ void MqttManager::connectToMqtt() {
 
 void MqttManager::onMqttConnect(bool sessionPresent) {
     Serial.println("[MqttManager] MQTT connected");
-    // np. automatycznie subskrybuj temat lub potwierdź połączenie
+
+    // subskrybujemy komendę podlewania
+    Serial.print("[MqttManager] Subscribing to ");
+    Serial.println(CMD_TOPIC);
+    _mqttClient.subscribe(CMD_TOPIC, 1);
+}
+
+// handler wszystkich przychodzących wiadomości
+void MqttManager::onMqttMessage(const String& topic, const String& payload) {
+    Serial.print("[MqttManager] Message arrived [");
+    Serial.print(topic);
+    Serial.print("] -> ");
+    Serial.println(payload);
+
+    if (topic == String(CMD_TOPIC)) {
+        // parsujemy JSON: {"duration_ms":5000}
+        StaticJsonDocument<128> doc;
+        if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+            uint32_t d = doc["duration_ms"] | 0;
+            Serial.printf("[MqttManager] Water for %lu ms\n", d);
+            controller.handleWaterCmd(d);
+        } else {
+            Serial.println("[MqttManager] JSON parse error");
+        }
+    }
 }
 
 void MqttManager::publish(const char* topic, const char* payload) {
