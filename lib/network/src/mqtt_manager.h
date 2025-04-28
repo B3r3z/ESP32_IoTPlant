@@ -23,6 +23,8 @@ private:
 
     // handles successful MQTT connection
     void onMqttConnect(bool sessionPresent);
+    // handles incoming MQTT messages
+    void onMqttMessage(const String& topic, const String& payload);
 
     const char* _ssid;
     const char* _password;
