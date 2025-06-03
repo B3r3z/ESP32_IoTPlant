@@ -3,7 +3,7 @@
 
 // simulate sensor data
 float getMoisture() {
-    return random(200, 450) / 10.0;
+    return random(300, 450) / 10.0;
 }
 
 float getTemperature() {

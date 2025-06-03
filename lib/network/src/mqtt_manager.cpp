@@ -17,6 +17,10 @@ void MqttManager::begin(const char* ssid,
 
     Serial.println("[MqttManager] begin");
 
+    // Ustawienia MQTT
+    _mqttClient.setKeepAlive(60);  // keepalive 60 sekund
+    _mqttClient.setClientId(CLIENT_ID);
+    
     // ustawiamy callback odbioru wiadomości
     _mqttClient.onMessage(
       [this](char* topic, char* payload, AsyncMqttClientMessageProperties props,
@@ -39,11 +43,36 @@ void MqttManager::connectToWifi() {
 
 // polling-based update to handle Wi-Fi and MQTT reconnects
 void MqttManager::update() {
+    static IPAddress lastIP;
+    static unsigned long lastStatusPrint = 0;
+    unsigned long currentMillis = millis();
+    
+    // Wydrukuj status co 30 sekund dla diagnostyki
+    if (currentMillis - lastStatusPrint > 30000) {
+        lastStatusPrint = currentMillis;
+        Serial.print("[MqttManager] Status - WiFi: ");
+        Serial.print(WiFi.status());
+        Serial.print(", RSSI: ");
+        Serial.print(WiFi.RSSI());
+        Serial.print(" dBm, IP: ");
+        Serial.print(WiFi.localIP());
+        Serial.print(", MQTT connected: ");
+        Serial.println(_mqttClient.connected());
+    }
+    
     if (WiFi.status() == WL_CONNECTED) {
         if (!_wifiConnected) {
             _wifiConnected = true;
             Serial.print("[MqttManager] Wi-Fi connected, IP: ");
             Serial.println(WiFi.localIP());
+            lastIP = WiFi.localIP();
+            connectToMqtt();
+        } else if (WiFi.localIP() != lastIP) {
+            // IP się zmieniło, ponowne połączenie z MQTT
+            lastIP = WiFi.localIP();
+            Serial.print("[MqttManager] IP changed to: ");
+            Serial.println(lastIP);
+            _mqttClient.disconnect();
             connectToMqtt();
         }
     } else {
@@ -53,8 +82,12 @@ void MqttManager::update() {
             WiFi.reconnect();
         }
     }
-    if (_wifiConnected && !_mqttClient.connected()) {
+    
+    // Obsługa ponownego połączenia MQTT z opóźnieniem
+    if (_wifiConnected && !_mqttClient.connected() && 
+        (currentMillis - _lastMqttConnectAttempt > _mqttReconnectInterval)) {
         Serial.println("[MqttManager] MQTT not connected, reconnecting...");
+        _lastMqttConnectAttempt = currentMillis;
         connectToMqtt();
     }
 }
@@ -71,12 +104,17 @@ void MqttManager::connectToMqtt() {
     );
     _mqttClient.onDisconnect(
       [this](AsyncMqttClientDisconnectReason reason){
-          Serial.print("[MqttManager] MQTT disconnected, reason: ");
-          Serial.println((int)reason);
-          connectToMqtt();
+          onMqttDisconnect(reason);
       }
     );
     _mqttClient.connect();
+}
+
+void MqttManager::onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+    Serial.print("[MqttManager] MQTT disconnected, reason: ");
+    Serial.println((int)reason);
+    // Nie wywołujemy connectToMqtt() tutaj - będzie obsłużone przez update()
+    // z opóźnieniem, aby uniknąć szybkich wielokrotnych prób połączenia
 }
 
 void MqttManager::onMqttConnect(bool sessionPresent) {
@@ -86,6 +124,15 @@ void MqttManager::onMqttConnect(bool sessionPresent) {
     Serial.print("[MqttManager] Subscribing to ");
     Serial.println(CMD_TOPIC);
     _mqttClient.subscribe(CMD_TOPIC, 1);
+    
+    // Wysyłamy status po połączeniu
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), 
+             "{\"id\":\"%s\",\"version\":\"%s\",\"uptime\":%lu,\"rssi\":%d}", 
+             PLANT_ID, FIRMWARE_VERSION, millis() / 1000, WiFi.RSSI());
+    _mqttClient.publish(STATUS_TOPIC, 0, true, buffer);
+    Serial.print("[MqttManager] Published status: ");
+    Serial.println(buffer);
 }
 
 // handler wszystkich przychodzących wiadomości
@@ -114,7 +161,7 @@ void MqttManager::publish(const char* topic, const char* payload) {
         Serial.print(topic);
         Serial.print(": ");
         Serial.println(payload);
-        _mqttClient.publish(topic, 0, false, payload);
+        _mqttClient.publish(topic, 1, false, payload);  // QoS 1 dla większej niezawodności
     } else {
         Serial.println("[MqttManager] Publish failed: MQTT not connected");
     }
